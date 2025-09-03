@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "github.com/57ajay/module github.com/57ajay/collabwrite-server/proto";
+
+service DocumentService {
+  rpc DocumentStream(stream DocumentUpdateRequest)
+      returns (stream DocumentUpdateResponse);
+}
+
+// Message sent from client to server
+message DocumentUpdateRequest {
+  string document_id = 1;
+  string content = 2;
+  string client_id = 3; // To identify who made the change
+}
+
+// Message broadcast from server to clients
+message DocumentUpdateResponse {
+  string document_id = 1;
+  string content = 2;
+  string client_id =
+      3; // Who made the change, so clients can ignore their own updates
+}

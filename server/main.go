@@ -1,46 +1,66 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"time"
 
+	pb "github.com/57ajay/collabwrite-server/proto"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/grpc"
 )
 
 type apiConfig struct {
-	DB *sql.DB
+	DB *pgxpool.Pool
+}
+
+func startGrpcServer() {
+	lis, err := net.Listen("tcp", ":9090")
+	if err != nil {
+		log.Fatalf("Failed to listen on port 9090: %v", err)
+	}
+	s := grpc.NewServer()
+	pb.RegisterDocumentServiceServer(s, newGrpcServer())
+	log.Println("gRPC server is running on port 9090")
+	if err := s.Serve(lis); err != nil {
+		log.Fatalf("Failed to start gRPC server: %v", err)
+	}
 }
 
 func main() {
 	connStr := "postgres://ajay:57ajay@localhost:5432/collabwrite?sslmode=disable"
 
-	db, err := sql.Open("pgx", connStr)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	dbPool, err := pgxpool.New(ctx, connStr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Unable to connect to database: %v\n", err)
 		os.Exit(1)
 	}
-	defer db.Close()
+	defer dbPool.Close()
 
-	err = db.Ping()
+	err = dbPool.Ping(ctx)
 	if err != nil {
 		log.Fatalf("Failed to ping database: %v", err)
 	}
-
 	fmt.Println("Successfully connected to the database!")
 
+	go startGrpcServer()
+
 	apiCfg := &apiConfig{
-		DB: db,
+		DB: dbPool,
 	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
-
 	r.Post("/documents", apiCfg.createDocumentHandler)
 	r.Get("/documents/{docID}", apiCfg.getDocumentHandler)
 	r.Put("/documents/{docID}", apiCfg.updateDocumentHandler)
@@ -48,22 +68,20 @@ func main() {
 	port := "8080"
 	log.Printf("Server is running on port %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, r))
-
 }
 
 func (api *apiConfig) createDocumentHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	var doc Document
 
 	err := json.NewDecoder(r.Body).Decode(&doc)
-
 	if err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	query := `INSERT INTO documents (title, content) VALUES ($1, $2) RETURNING id, created_at, updated_at`
-	err = api.DB.QueryRow(query, doc.Title, doc.Content).Scan(&doc.ID, &doc.CreatedAt, &doc.UpdatedAt)
-
+	err = api.DB.QueryRow(ctx, query, doc.Title, doc.Content).Scan(&doc.ID, &doc.CreatedAt, &doc.UpdatedAt)
 	if err != nil {
 		log.Printf("Failed to insert document: %v", err)
 		http.Error(w, "Failed to create document", http.StatusInternalServerError)
@@ -76,14 +94,14 @@ func (api *apiConfig) createDocumentHandler(w http.ResponseWriter, r *http.Reque
 }
 
 func (api *apiConfig) getDocumentHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	docId := chi.URLParam(r, "docID")
-
 	var doc Document
-	query := `SELECT id, title, content, created_at, updated_at FROM documents WHERE id = $1`
-	err := api.DB.QueryRow(query, docId).Scan(&doc.ID, &doc.Title, &doc.Content, &doc.CreatedAt, &doc.UpdatedAt)
 
+	query := `SELECT id, title, content, created_at, updated_at FROM documents WHERE id = $1`
+	err := api.DB.QueryRow(ctx, query, docId).Scan(&doc.ID, &doc.Title, &doc.Content, &doc.CreatedAt, &doc.UpdatedAt)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if err.Error() == "no rows in result set" {
 			http.Error(w, "Document not found", http.StatusNotFound)
 			return
 		}
@@ -91,15 +109,16 @@ func (api *apiConfig) getDocumentHandler(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Failed to get document", http.StatusInternalServerError)
 		return
 	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(doc)
-
 }
 
 func (api *apiConfig) updateDocumentHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	docId := chi.URLParam(r, "docID")
-
 	var doc Document
+
 	err := json.NewDecoder(r.Body).Decode(&doc)
 	if err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -107,10 +126,9 @@ func (api *apiConfig) updateDocumentHandler(w http.ResponseWriter, r *http.Reque
 	}
 
 	query := `UPDATE documents SET title = $1, content = $2, updated_at = NOW() WHERE id = $3 RETURNING updated_at`
-	err = api.DB.QueryRow(query, doc.Title, doc.Content, docId).Scan(&doc.UpdatedAt)
-
+	err = api.DB.QueryRow(ctx, query, doc.Title, doc.Content, docId).Scan(&doc.UpdatedAt)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if err.Error() == "no rows in result set" {
 			http.Error(w, "Document not found", http.StatusNotFound)
 			return
 		}
@@ -123,3 +141,4 @@ func (api *apiConfig) updateDocumentHandler(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(doc)
 }
+
