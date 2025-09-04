@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"log"
 	"sync"
@@ -24,75 +25,42 @@ type documentStreams struct {
 
 type grpcServer struct {
 	pb.UnimplementedDocumentServiceServer
-	docStreams *documentStreams
+	kafkaProducer *KafkaProducer
 }
 
-func newGrpcServer() *grpcServer {
+func newGrpcServer(producer *KafkaProducer) *grpcServer {
 	return &grpcServer{
-		docStreams: &documentStreams{
-			streams: make(map[string]map[string]pb.DocumentService_DocumentStreamServer),
-		},
+		kafkaProducer: producer,
 	}
 }
 
 func (s *grpcServer) DocumentStream(stream pb.DocumentService_DocumentStreamServer) error {
 
-	// this is gonna be the first message from the client, and this will contain clientID and docID
-	initialMsg, err := stream.Recv()
-	if err != nil {
-		log.Printf("Error receiving initial message: %v", err)
-		return err
-	}
-
-	// this will add client's stream to our map
-	docID := initialMsg.GetDocumentId()
-	clientID := initialMsg.ClientId
-	log.Printf("Client %s connected to document %s", clientID, docID)
-
-	s.docStreams.Lock()
-	if _, ok := s.docStreams.streams[docID]; !ok {
-		s.docStreams.streams[docID] = make(map[string]pb.DocumentService_DocumentStreamServer)
-	}
-	s.docStreams.streams[docID][clientID] = stream
-	s.docStreams.Unlock()
-
-	// in case client disconnects
-	defer func() {
-		log.Printf("Client %s disconnected from document %s", clientID, docID)
-		s.docStreams.Lock()
-		delete(s.docStreams.streams[docID], clientID)
-		if len(s.docStreams.streams[docID]) == 0 {
-			delete(s.docStreams.streams, docID)
-		}
-	}()
-
-	// now this is main loop where we receive message from this ClientID and bradcast them
+	// now this main loop is to receive a message and produce it to Kafka.
 	for {
+
 		req, err := stream.Recv()
 		if err == io.EOF {
-			return nil // this means client closed the stream
+			log.Println("Client closed the stream")
+			return nil
 		}
+
 		if err != nil {
-			log.Printf("Error receiving message from %s: %v", clientID, err)
+			log.Printf("Error receiving message: %v", err)
 			return err
 		}
 
-		// now we will broadcast the same message to all the client in the DocumentStream
-		s.docStreams.RLock()
-
-		for id, clientStream := range s.docStreams.streams[docID] {
-
-			if id != clientID { // ignore the original client who made changes
-				if err := clientStream.Send(&pb.DocumentUpdateResponse{
-					DocumentId: req.GetDocumentId(),
-					Content:    req.GetContent(),
-					ClientId:   req.GetClientId(),
-				}); err != nil {
-					log.Printf("Error sending message to client %s: %v", id, err)
-				}
-			}
-
+		msg := DocumentUpdateMessage{
+			DocumentID: req.GetDocumentId(),
+			ClientID:   req.GetClientId(),
+			Content:    req.GetContent(),
 		}
-		s.docStreams.RUnlock()
+
+		if err := s.kafkaProducer.ProduceMessage(context.Background(), msg); err != nil {
+			// will try to send the error back to client later, maybe
+			log.Printf("Failed to produce message to Kafka: %v", err)
+		}
+
 	}
+
 }

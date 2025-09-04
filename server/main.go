@@ -21,13 +21,13 @@ type apiConfig struct {
 	DB *pgxpool.Pool
 }
 
-func startGrpcServer() {
+func startGrpcServer(producer *KafkaProducer) {
 	lis, err := net.Listen("tcp", ":9090")
 	if err != nil {
 		log.Fatalf("Failed to listen on port 9090: %v", err)
 	}
 	s := grpc.NewServer()
-	pb.RegisterDocumentServiceServer(s, newGrpcServer())
+	pb.RegisterDocumentServiceServer(s, newGrpcServer(producer))
 	log.Println("gRPC server is running on port 9090")
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("Failed to start gRPC server: %v", err)
@@ -53,7 +53,12 @@ func main() {
 	}
 	fmt.Println("Successfully connected to the database!")
 
-	go startGrpcServer()
+	kafkaBrokers := []string{"localhost:9092"}
+	kafkaTopic := "document-updates"
+	kafkaProducer := NewKafkaProducer(kafkaBrokers, kafkaTopic)
+	defer kafkaProducer.Close()
+
+	go startGrpcServer(kafkaProducer)
 
 	apiCfg := &apiConfig{
 		DB: dbPool,
@@ -141,4 +146,3 @@ func (api *apiConfig) updateDocumentHandler(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(doc)
 }
-
