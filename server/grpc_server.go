@@ -64,7 +64,6 @@ func (s *grpcServer) DocumentStream(stream pb.DocumentService_DocumentStreamServ
 		if len(s.docStreams.streams[docID]) == 0 {
 			delete(s.docStreams.streams, docID)
 		}
-		s.docStreams.Unlock()
 	}()
 
 	// now this is main loop where we receive message from this ClientID and bradcast them
@@ -94,6 +93,6 @@ func (s *grpcServer) DocumentStream(stream pb.DocumentService_DocumentStreamServ
 			}
 
 		}
-		s.docStreams.Unlock()
+		s.docStreams.RUnlock()
 	}
 }
