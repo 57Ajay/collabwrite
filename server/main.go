@@ -53,10 +53,17 @@ func main() {
 	}
 	fmt.Println("Successfully connected to the database!")
 
+	// kafka producer
 	kafkaBrokers := []string{"localhost:9092"}
 	kafkaTopic := "document-updates"
 	kafkaProducer := NewKafkaProducer(kafkaBrokers, kafkaTopic)
 	defer kafkaProducer.Close()
+
+	// kafka consumer
+	consumerGroupID := "persister-group"
+	kafkaConsumer := NewKafkaConsumer(kafkaBrokers, kafkaTopic, consumerGroupID, dbPool)
+	defer kafkaConsumer.Close()
+	go kafkaConsumer.Run(context.Background())
 
 	go startGrpcServer(kafkaProducer)
 
