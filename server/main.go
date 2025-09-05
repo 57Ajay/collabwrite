@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rs/cors"
 	"google.golang.org/grpc"
 )
 
@@ -72,6 +73,14 @@ func main() {
 	}
 
 	r := chi.NewRouter()
+	r.Use(cors.New(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:5173"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}).Handler)
 	r.Use(middleware.Logger)
 	r.Post("/documents", apiCfg.createDocumentHandler)
 	r.Get("/documents/{docID}", apiCfg.getDocumentHandler)

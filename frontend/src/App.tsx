@@ -1,9 +1,10 @@
 import _React from "react";
+import TiptapEditor from "./components/Editor.tsx";
 
 function App() {
     return (
         <>
-            <h1 className="font-bold text-green-700">HI from AJAY.</h1>
+            <TiptapEditor />
         </>
     );
 }

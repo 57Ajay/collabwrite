@@ -37,12 +37,10 @@ func (p *KafkaProducer) ProduceMessage(ctx context.Context, msg DocumentUpdateMe
 		return err
 	}
 
-	err = p.writer.WriteMessages(ctx, kafka.Message{
+	if err := p.writer.WriteMessages(ctx, kafka.Message{
 		Key:   []byte(msg.DocumentID), // DocumentID as the key to ensure messages for the same document go to the same partition
 		Value: msgBytes,
-	})
-
-	if err != nil {
+	}); err != nil {
 		log.Printf("could not write message: %v", err)
 		return err
 	}
