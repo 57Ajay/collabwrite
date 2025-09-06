@@ -22,10 +22,10 @@ type apiConfig struct {
 	DB *pgxpool.Pool
 }
 
-func startGrpcServer(producer *KafkaProducer) {
-	lis, err := net.Listen("tcp", ":9090")
+func startGrpcServer(producer *KafkaProducer, port string) {
+	lis, err := net.Listen("tcp", ":"+port)
 	if err != nil {
-		log.Fatalf("Failed to listen on port 9090: %v", err)
+		log.Fatalf("Failed to listen on port %s: %v", port, err)
 	}
 	s := grpc.NewServer()
 	pb.RegisterDocumentServiceServer(s, newGrpcServer(producer))
@@ -36,12 +36,17 @@ func startGrpcServer(producer *KafkaProducer) {
 }
 
 func main() {
-	connStr := "postgres://ajay:57ajay@localhost:5432/collabwrite?sslmode=disable"
+	log.Println("Starting CollabWrite server...")
+
+	dbHost := os.Getenv("DATABASE_URL")
+	if dbHost == "" {
+		dbHost = "postgres://ajay:57ajay@localhost:5432/collabwrite?sslmode=disable"
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	dbPool, err := pgxpool.New(ctx, connStr)
+	dbPool, err := pgxpool.New(ctx, dbHost)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Unable to connect to database: %v\n", err)
 		os.Exit(1)
@@ -55,7 +60,11 @@ func main() {
 	fmt.Println("Successfully connected to the database!")
 
 	// kafka producer
-	kafkaBrokers := []string{"localhost:9092"}
+	kafkaBroker := os.Getenv("KAFKA_BROKERS")
+	if kafkaBroker == "" {
+		kafkaBroker = "localhost:9092"
+	}
+	kafkaBrokers := []string{kafkaBroker}
 	kafkaTopic := "document-updates"
 	kafkaProducer := NewKafkaProducer(kafkaBrokers, kafkaTopic)
 	defer kafkaProducer.Close()
@@ -66,7 +75,11 @@ func main() {
 	defer kafkaConsumer.Close()
 	go kafkaConsumer.Run(context.Background())
 
-	go startGrpcServer(kafkaProducer)
+	grpcPort := os.Getenv("GO_GRPC_PORT")
+	if grpcPort == "" {
+		grpcPort = "9090"
+	}
+	go startGrpcServer(kafkaProducer, grpcPort)
 
 	apiCfg := &apiConfig{
 		DB: dbPool,
@@ -86,9 +99,12 @@ func main() {
 	r.Get("/documents/{docID}", apiCfg.getDocumentHandler)
 	r.Put("/documents/{docID}", apiCfg.updateDocumentHandler)
 
-	port := "8080"
-	log.Printf("Server is running on port %s", port)
-	log.Fatal(http.ListenAndServe(":"+port, r))
+	restPort := os.Getenv("GO_REST_PORT")
+	if restPort == "" {
+		restPort = "8081"
+	}
+	log.Printf("REST server is running internally on port %s", restPort)
+	log.Fatal(http.ListenAndServe(":"+restPort, r))
 }
 
 func (api *apiConfig) createDocumentHandler(w http.ResponseWriter, r *http.Request) {
