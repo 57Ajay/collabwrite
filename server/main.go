@@ -22,6 +22,7 @@ type apiConfig struct {
 	DB *pgxpool.Pool
 }
 
+// since grpc-web do not support bidirectional streaming for now i have to abandon the grpc
 func startGrpcServer(producer *KafkaProducer, port string) {
 	lis, err := net.Listen("tcp", ":"+port)
 	if err != nil {
@@ -69,17 +70,23 @@ func main() {
 	kafkaProducer := NewKafkaProducer(kafkaBrokers, kafkaTopic)
 	defer kafkaProducer.Close()
 
-	// kafka consumer
-	consumerGroupID := "persister-group"
-	kafkaConsumer := NewKafkaConsumer(kafkaBrokers, kafkaTopic, consumerGroupID, dbPool)
+	hub := newHub()
+	consumerGroupID := "broadcaster-group"
+	kafkaConsumer := NewKafkaConsumer(kafkaBrokers, kafkaTopic, consumerGroupID, dbPool, hub)
 	defer kafkaConsumer.Close()
 	go kafkaConsumer.Run(context.Background())
 
-	grpcPort := os.Getenv("GO_GRPC_PORT")
-	if grpcPort == "" {
-		grpcPort = "9090"
-	}
-	go startGrpcServer(kafkaProducer, grpcPort)
+	// Create another consumer for persistence
+	persisterGroupID := "persister-group"
+	persisterConsumer := NewKafkaConsumer(kafkaBrokers, kafkaTopic, persisterGroupID, dbPool, nil)
+	defer persisterConsumer.Close()
+	go persisterConsumer.Run(context.Background())
+
+	// grpcPort := os.Getenv("GO_GRPC_PORT")
+	// if grpcPort == "" {
+	// 	grpcPort = "9090"
+	// }
+	// go startGrpcServer(kafkaProducer, grpcPort)
 
 	apiCfg := &apiConfig{
 		DB: dbPool,
@@ -95,6 +102,12 @@ func main() {
 		MaxAge:           300,
 	}).Handler)
 	r.Use(middleware.Logger)
+
+	r.HandleFunc("/ws/{docID}", func(w http.ResponseWriter, r *http.Request) {
+		docID := chi.URLParam(r, "docID")
+		hub.serveWS(w, r, docID, kafkaProducer)
+	})
+
 	r.Post("/documents", apiCfg.createDocumentHandler)
 	r.Get("/documents/{docID}", apiCfg.getDocumentHandler)
 	r.Put("/documents/{docID}", apiCfg.updateDocumentHandler)

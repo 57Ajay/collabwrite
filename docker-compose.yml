@@ -1,6 +1,7 @@
 services:
   collab-backend:
-    build: .
+    build:
+      context: ./server
     restart: always
     environment:
       - DATABASE_URL=postgres://ajay:57ajay@db:5432/collabwrite?sslmode=disable
@@ -8,8 +9,11 @@ services:
       - GO_REST_PORT=8081
       - GO_GRPC_PORT=9090
     depends_on:
-      - db
-      - kafka
+      db:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+
   nginx:
     image: nginx:latest
     restart: always
@@ -49,6 +53,11 @@ services:
       - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       - KAFKA_CLUSTER_ID=tCy5umSrQQG8JnGqOa1lPw
       - ALLOW_PLAINTEXT_LISTENER=yes
+    healthcheck:
+      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   db_data:
